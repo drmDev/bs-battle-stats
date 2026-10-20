@@ -1,0 +1,13 @@
+{
+	"id": "mybattlestats",
+	"name": "My Battle Stats",
+  "version": "0.1.0",
+  "author": "Maxkii3 and NescapePlan",
+  "description": "Personal battle stats experiment based on BatoEyes.",
+  "settings": [
+    {"key": "opponent_panel", "label": "Opponent card in battle", "type": "bool", "default": true,
+     "description": "Opponent name, trainer, MMR, lives / wins / Day, plus your own team's live damage and DPS per unit."},
+    {"key": "auto_update", "label": "Auto-update", "type": "bool", "default": true,
+     "description": "Download and install new BatoEyes versions by themselves (they start with the next game start). Updates the author marks as required install even when this is off."}
+  ]
+}
