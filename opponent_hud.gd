@@ -167,16 +167,6 @@ func _info_row(x: float, y: float, cw: float) -> void:
 	skin.ink(self, font, Vector2(cursor_x, baseline),
 		day_text, FS, day_color)
 
-	# Right: your team's live DPS.
-	var elapsed_time: float = maxf(float(live.get("time", 0.0)), 0.001)
-	var dps_text := "-"
-	if _started():
-		dps_text = skin.num(float(live.get("damage", 0.0)) / elapsed_time)
-
-	var dps_width: float = font.get_string_size(
-		dps_text, HORIZONTAL_ALIGNMENT_LEFT, -1, FS).x
-
-
 ## YOUR team: two columns (front row slots 0-2, back row slots 3-5), each "name  DPS  HPS  SPS".
 func _team_table(x: float, y: float, cw: float) -> void:
 	# Colors: experiment here.
