@@ -38,6 +38,9 @@ var _captured_opponent = null        # RunData the game handed to the battle tra
 var _captured_at := 0
 var _battle_id := 0                  # instance id of the battle state the HUD info belongs to
 var _info: Dictionary = {}
+var _battle_result_shown := false    # track if we've shown victory/defeat for this battle
+var _audio_player: AudioStreamPlayer
+var _pikachu_overlay: Control
 
 
 var hooks: Array[String] = []        # Mod Loader lifecycle hooks received, in order (log + harness)
@@ -148,6 +151,43 @@ func _boot_overlay() -> void:
 	# the player's minimize / move choices are saved at once (they hold across rounds and restarts)
 	hud.minimized_changed.connect(func(_on): _save_cfg())
 	hud.moved_by_drag.connect(_save_cfg)
+	
+	# Setup victory fanfare audio player
+	_audio_player = AudioStreamPlayer.new()
+	_audio_player.name = "VictoryFanfare"
+	var fanfare_path := base_dir.path_join("assets/sounds/fanfareff.ogg")
+	var fanfare_stream = load(fanfare_path)
+	if fanfare_stream is AudioStream:
+		_audio_player.stream = fanfare_stream
+		_audio_player.volume_db = 0.0
+	else:
+		push_warning("MyBattleStats: Failed to load victory fanfare from: %s" % fanfare_path)
+	add_child(_audio_player)
+	
+	# Setup shocked Pikachu overlay (hidden by default)
+	_pikachu_overlay = Control.new()
+	_pikachu_overlay.name = "PikachuOverlay"
+	_pikachu_overlay.visible = false
+	_pikachu_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_pikachu_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	
+	var pikachu_texture_rect = TextureRect.new()
+	pikachu_texture_rect.name = "PikachuImage"
+	pikachu_texture_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	pikachu_texture_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	pikachu_texture_rect.set_anchors_preset(Control.PRESET_CENTER)
+	pikachu_texture_rect.position = Vector2(-200, -200)  # Center offset
+	pikachu_texture_rect.size = Vector2(400, 400)  # Large shocked Pikachu!
+	
+	var pikachu_path := base_dir.path_join("assets/surprisedPika.jpg")
+	var pikachu_image := Image.new()
+	if pikachu_image.load(pikachu_path) == OK:
+		pikachu_texture_rect.texture = ImageTexture.create_from_image(pikachu_image)
+	else:
+		push_warning("MyBattleStats: Failed to load shocked Pikachu from: %s" % pikachu_path)
+	
+	_pikachu_overlay.add_child(pikachu_texture_rect)
+	layer.add_child(_pikachu_overlay)
 
 	get_tree().node_added.connect(_on_node_added)
 
@@ -270,6 +310,7 @@ func _tick_battle(st) -> void:
 		return
 	if st.get_instance_id() != _battle_id or _info.is_empty():
 		_battle_id = st.get_instance_id()
+		_battle_result_shown = false  # Reset for new battle
 		_info = opponent_info(p2, _captured_opponent)
 		_info["my_team"] = team_list(st.get("_replay_p1_data"))
 
@@ -289,9 +330,41 @@ func _tick_battle(st) -> void:
 				_info[pair[0]] = str(value)
 				
 	var sim = st.get("simulation")
-	hud.show_info(_info, battle_snapshot(sim))
+	var snapshot = battle_snapshot(sim)
+	hud.show_info(_info, snapshot)
 	# the game's VS intro already names both sides full-screen: the card appears once the fight runs
 	hud.visible = bool(st.get("is_battle_active")) or (sim != null and (float(sim.data.time_elapsed) > 0.0 or sim.data.battle_over))
+	
+	# Check for battle end and trigger victory/defeat effects
+	if sim != null and sim.data != null and sim.data.battle_over and not _battle_result_shown:
+		_battle_result_shown = true
+		_check_battle_result(sim.data)
+
+
+## Check battle result and trigger victory fanfare or defeat Pikachu
+func _check_battle_result(battle_data) -> void:
+	# Determine if player won by checking if any enemy units are alive
+	var player_won := true
+	for u in battle_data.battle_units:
+		if u != null and u.team_id == 1:  # team_id 1 is opponent
+			if not u.is_dead:
+				player_won = false
+				break
+	
+	if player_won:
+		# Victory! Play Final Fantasy fanfare
+		print("MyBattleStats: VICTORY! Playing fanfare...")
+		if _audio_player != null and _audio_player.stream != null:
+			_audio_player.play()
+	else:
+		# Defeat! Show shocked Pikachu
+		print("MyBattleStats: DEFEAT! Showing shocked Pikachu...")
+		if _pikachu_overlay != null:
+			_pikachu_overlay.visible = true
+			# Hide Pikachu after 3 seconds
+			await get_tree().create_timer(3.0).timeout
+			if _pikachu_overlay != null:
+				_pikachu_overlay.visible = false
 
 
 ## Static facts about the opponent for the HUD (from the battle's own copy of their run).
