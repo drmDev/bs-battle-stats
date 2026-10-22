@@ -22,8 +22,6 @@ const ICON_LIVES := "res://assets/ui/textures/shop/lives_icon.png"
 const ICON_LIVES_SC := "res://assets/ui/textures/shop/lives_icon_second_chance.png"
 
 # Colours sampled from the game's text themes (description_text / small_header / small_number)
-
-
 const OUTLINE := Color(0.251, 0.251, 0.251)
 const WHITE := Color(0.98, 0.98, 0.98)
 const GOLD := Color(1.0, 0.82, 0.25)
@@ -33,6 +31,8 @@ const RED := Color(0.93, 0.36, 0.33)                # opponent side
 const INK := Color("#263348")
 const INK_SHADOW := Color("#ffffff")
 const BLUE := Color("#007f91")
+const GREEN := Color("#27ae60")
+const YELLOW := Color("#f39c12")
 const DIM := Color("#747d8c")
 
 var panel: StyleBox
@@ -44,13 +44,18 @@ var font_text: Font
 var font_number: Font
 var icon_lives: Texture2D
 var icon_lives_sc: Texture2D
+var icon_sword: Texture2D
+var icon_heal: Texture2D
+var icon_shield: Texture2D
+var icon_badge: Texture2D
+var icon_sun: Texture2D
 var fallbacks: Array[Font] = []      # shared fallback chain (game Noto fonts + a system font)
 var ellipsis := "..."                # U+2026 when a font of ours has it (resolved once in _init)
 var _fit_cache: Dictionary = {}
 var missing: Array[String] = []     # assets that fell back (logged once, checked by the harness)
 
 
-func _init() -> void:
+func _init(base_dir: String = "") -> void:
 	panel = _flat(Color("#f0f4f8"), Color("#52647a"))
 	section = _style(SECTION_THEME, _flat(Color(0.86, 0.85, 0.82), Color(0.6, 0.6, 0.62)))
 	header = _style(HEADER_THEME, _flat(Color(0.98, 0.8, 0.3), Color(0.35, 0.28, 0.1)))
@@ -74,6 +79,21 @@ func _init() -> void:
 
 	icon_lives = _tex(ICON_LIVES)
 	icon_lives_sc = _tex(ICON_LIVES_SC)
+	
+	# Load custom icons from mod directory
+	if base_dir != "":
+		var sword_path := base_dir.path_join("assets/sword.png")
+		var heal_path := base_dir.path_join("assets/heal.png")
+		var shield_path := base_dir.path_join("assets/shield.png")
+		var badge_path := base_dir.path_join("assets/badge.png")
+		var sun_path := base_dir.path_join("assets/sun.png")
+		
+		icon_sword = _external_texture(sword_path)
+		icon_heal = _external_texture(heal_path)
+		icon_shield = _external_texture(shield_path)
+		icon_badge = _external_texture(badge_path)
+		icon_sun = _external_texture(sun_path)
+	
 	var e := String.chr(0x2026)
 	if can_draw(font_text, e) and can_draw(font_header, e):
 		ellipsis = e
@@ -159,6 +179,20 @@ func _tex(path: String) -> Texture2D:
 			return t
 	missing.append(path)
 	return null
+
+
+func _external_texture(path: String) -> Texture2D:
+	var image := Image.new()
+	var error: Error = image.load(path)
+
+	if error != OK:
+		push_warning(
+			"MyBattleStats: image load failed: %s (%s)"
+			% [path, error_string(error)]
+		)
+		return null
+
+	return ImageTexture.create_from_image(image)
 
 
 static func _flat(bg: Color, border: Color) -> StyleBoxFlat:

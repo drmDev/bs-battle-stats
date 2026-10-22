@@ -1,11 +1,9 @@
 extends "collapsible_panel.gd"
-## Battle screen card: who you are fighting, and what YOUR team is doing, live. (No trinkets,
-## no health bars, no opponent damage - by request.)
-##   header : VS <opponent name>
-##   row 1  : username (trainer class) + MMR  |  their lives (icon) / Wins n / Day  |  your team DPS
-##   table  : YOUR team - unit, damage dealt so far, damage per second; front row (slots 0-2) on the
-##            left, back row (slots 3-5) on the right, like the board
-## No health bars and no opponent damage here: the game's own bars already show HP.
+## Battle screen card showing YOUR team's live stats during battle.
+##   header : My Battle Stats
+##   row 1  : HP (icon) | Wins (icon) | Day (icon) | Your DPS (right-aligned)
+##   table  : YOUR team - unit name, DPS, HPS, SPS; front row (slots 0-2) on the left,
+##            back row (slots 3-5) on the right, like the board
 ## Sits in the strip between the two trainer portraits, below the board, so the game's floating
 ## damage / heal numbers never cover it. Drag the header to move it; click it (or its -/+ button) to
 ## minimize it to the header bar. Position and minimized state are remembered.
@@ -15,12 +13,8 @@ const PAD := 5.0
 const ROW := 10.0          # one text row
 const GAP := 3.0
 const COL_GAP := 12.0
-const ICON := 10.0
 const FS := 8              # body font size (the game's small text)
 const TABLE_ROWS := 3      # 6 slots = 2 columns x 3 rows
-const NAME_MAX_W := 120.0  # a long username is trimmed with an ellipsis, the rest of the row stays put
-const NAME_FS := 12        # opponent name in the header (headline; the game uses this font at 12)
-const VS_FS := 9
 
 var info: Dictionary = {}            # static facts (mod_main.opponent_info)
 var live: Dictionary = {}            # live battle snapshot (mod_main.battle_snapshot)
@@ -35,8 +29,7 @@ func full_height() -> float:
 	if info.is_empty():
 		return HEAD_H + 20.0
 
-	var footer_height: float = ROW if bool(live.get("over", false)) else 0.0
-	return HEAD_H + PAD + ROW + GAP + ROW + TABLE_ROWS * ROW + PAD + 3 + footer_height
+	return HEAD_H + PAD + ROW + GAP + ROW + TABLE_ROWS * ROW + PAD + 3
 
 func header_style() -> StyleBox:
 	return skin.header_red
@@ -144,14 +137,32 @@ func _info_row(x: float, y: float, cw: float) -> void:
 	cursor_x += font.get_string_size(
 		hp, HORIZONTAL_ALIGNMENT_LEFT, -1, FS).x + group_gap
 
-	# Wins: gold label and value.
+	# Wins: badge icon, then gold label and value.
+	if skin.icon_badge != null:
+		var icon_position := Vector2(cursor_x, y + (ROW - icon_size) * 0.5)
+		draw_texture_rect(
+			skin.icon_badge,
+			Rect2(icon_position, Vector2(icon_size, icon_size)),
+			false
+		)
+		cursor_x += icon_size + icon_gap
+	
 	var wins_text := "Wins %s" % wins
 	skin.ink(self, font, Vector2(cursor_x, baseline),
 		wins_text, FS, wins_color)
 	cursor_x += font.get_string_size(
 		wins_text, HORIZONTAL_ALIGNMENT_LEFT, -1, FS).x + group_gap
 
-	# Day: orange label and value.
+	# Day: sun icon, then orange label and value.
+	if skin.icon_sun != null:
+		var icon_position := Vector2(cursor_x, y + (ROW - icon_size) * 0.5)
+		draw_texture_rect(
+			skin.icon_sun,
+			Rect2(icon_position, Vector2(icon_size, icon_size)),
+			false
+		)
+		cursor_x += icon_size + icon_gap
+	
 	var day_text := "Day %s" % day
 	skin.ink(self, font, Vector2(cursor_x, baseline),
 		day_text, FS, day_color)
@@ -165,29 +176,22 @@ func _info_row(x: float, y: float, cw: float) -> void:
 	var dps_width: float = font.get_string_size(
 		dps_text, HORIZONTAL_ALIGNMENT_LEFT, -1, FS).x
 
-	skin.ink(self, font, Vector2(x + cw - dps_width, baseline),
-		dps_text, FS, dps_color)
-	skin.ink(self, font, Vector2(x, baseline),
-		"Your DPS ", FS, label_color,
-		cw - dps_width - 2, HORIZONTAL_ALIGNMENT_RIGHT)
 
-
-## YOUR team: two columns (front row slots 0-2, back row slots 3-5), each "name  damage  /s".
+## YOUR team: two columns (front row slots 0-2, back row slots 3-5), each "name  DPS  HPS  SPS".
 func _team_table(x: float, y: float, cw: float) -> void:
 	# Colors: experiment here.
 	var normal_color: Color = skin.INK
 	var knocked_out_color: Color = skin.DIM
 	var heading_color: Color = skin.DIM
 	var active_dps_color: Color = skin.BLUE
-	var carry_color := Color("#a36800")
-	var evaluate_color := Color("#8054a6")
+	var carry_color := Color("#a36800")  # Used for highlighting highest DPS unit
 	var divider_color := Color(skin.INK, 0.2)
 
 	# Layout and battle state.
 	var font: Font = skin.font_text
 	var column_width := (cw - COL_GAP) * 0.5
-	var number_width := 40.0
-	var name_width := column_width - number_width * 2 - 6
+	var number_width := 35.0  # Reduced from 40.0 to fit 3 columns
+	var name_width := column_width - number_width * 3 - 8  # Changed from * 2 - 6 to fit 3 columns
 	var battle_started: bool = _started()
 	var battle_finished: bool = battle_started and bool(live.get("over", false))
 	var elapsed_time: float = maxf(float(live.get("time", 0.0)), 0.001)
@@ -200,62 +204,49 @@ func _team_table(x: float, y: float, cw: float) -> void:
 		var unit_damage := float(units[unit_slot].get("damage", 0.0))
 		highest_damage = maxf(highest_damage, unit_damage)
 
-	# Final ranking: highest damage first, then board slot to break ties.
-	# Only include team members present in the snapshot.
-	var ranked: Array[Dictionary] = []
-	if battle_finished:
-		for unit in team:
-			var slot := int(unit.slot)
-			if not units.has(slot):
-				continue
-
-			var stats: Dictionary = units[slot]
-			ranked.append({
-				"slot": slot,
-				"name": str(unit.name),
-				"damage": float(stats.get("damage", 0.0)),
-			})
-
-		ranked.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-			var damage_a := float(a["damage"])
-			var damage_b := float(b["damage"])
-			if damage_a == damage_b:
-				return int(a["slot"]) < int(b["slot"])
-			return damage_a > damage_b
-		)
-
-	var carry_slot := -1
-	var carry_name := ""
-	var evaluate_slots: Array[int] = []
-	var evaluate_names := PackedStringArray()
-
-	# Don't label a carry when nobody dealt damage.
-	if not ranked.is_empty():
-		if float(ranked[0]["damage"]) > 0.0:
-			carry_slot = int(ranked[0]["slot"])
-			carry_name = str(ranked[0]["name"])
-
-			# Take up to two lowest units, excluding the carry.
-			var evaluate_count := mini(2, ranked.size() - 1)
-			for i in range(evaluate_count):
-				var candidate: Dictionary = ranked[ranked.size() - 1 - i]
-				evaluate_slots.append(int(candidate["slot"]))
-				evaluate_names.append(str(candidate["name"]))
-
 	# Column headings.
 	for column in range(2):
 		var column_x := x + column * (column_width + COL_GAP)
 		var heading_y := _base(y)
-		var damage_x := column_x + column_width - number_width * 2 - 4
-		var dps_x := column_x + column_width - number_width
+		var dps_x := column_x + column_width - number_width * 3 - 6
+		var hps_x := column_x + column_width - number_width * 2 - 4
+		var sps_x := column_x + column_width - number_width - 2
 		var side := "front" if column == 0 else "back"
 
 		skin.ink(self, font, Vector2(column_x, heading_y),
 			"Your team - %s" % side, FS, heading_color)
-		skin.ink(self, font, Vector2(damage_x, heading_y),
-			"damage", FS, heading_color, number_width, HORIZONTAL_ALIGNMENT_RIGHT)
-		skin.ink(self, font, Vector2(dps_x, heading_y),
-			"per sec", FS, heading_color, number_width, HORIZONTAL_ALIGNMENT_RIGHT)
+		
+		# DPS column with sword icon - icon positioned right next to text
+		var icon_size := 8.0
+		var icon_gap := 2.0
+		var dps_text_width := font.get_string_size("DPS", HORIZONTAL_ALIGNMENT_LEFT, -1, FS).x
+		var dps_text_x := column_x + column_width - number_width * 3 - 6 + number_width - dps_text_width
+		skin.ink(self, font, Vector2(dps_text_x, heading_y),
+			"DPS", FS, skin.GREEN, -1, HORIZONTAL_ALIGNMENT_LEFT)
+		if skin.icon_sword != null:
+			var icon_x := dps_text_x - icon_size - icon_gap
+			var icon_y := y + (ROW - icon_size) * 0.5
+			draw_texture_rect(skin.icon_sword, Rect2(icon_x, icon_y, icon_size, icon_size), false)
+		
+		# HPS column with heal icon - icon positioned right next to text
+		var hps_text_width := font.get_string_size("HPS", HORIZONTAL_ALIGNMENT_LEFT, -1, FS).x
+		var hps_text_x := column_x + column_width - number_width * 2 - 4 + number_width - hps_text_width
+		skin.ink(self, font, Vector2(hps_text_x, heading_y),
+			"HPS", FS, skin.YELLOW, -1, HORIZONTAL_ALIGNMENT_LEFT)
+		if skin.icon_heal != null:
+			var icon_x := hps_text_x - icon_size - icon_gap
+			var icon_y := y + (ROW - icon_size) * 0.5
+			draw_texture_rect(skin.icon_heal, Rect2(icon_x, icon_y, icon_size, icon_size), false)
+		
+		# SPS column with shield icon - icon positioned right next to text
+		var sps_text_width := font.get_string_size("SPS", HORIZONTAL_ALIGNMENT_LEFT, -1, FS).x
+		var sps_text_x := column_x + column_width - number_width - 2 + number_width - sps_text_width
+		skin.ink(self, font, Vector2(sps_text_x, heading_y),
+			"SPS", FS, skin.BLUE, -1, HORIZONTAL_ALIGNMENT_LEFT)
+		if skin.icon_shield != null:
+			var icon_x := sps_text_x - icon_size - icon_gap
+			var icon_y := y + (ROW - icon_size) * 0.5
+			draw_texture_rect(skin.icon_shield, Rect2(icon_x, icon_y, icon_size, icon_size), false)
 
 	# Divider between front and back columns.
 	var divider_x := x + column_width + COL_GAP * 0.5
@@ -277,14 +268,18 @@ func _team_table(x: float, y: float, cw: float) -> void:
 		var text_y := _base(row_top)
 
 		var name_position := Vector2(column_x, text_y)
-		var damage_position := Vector2(
-			column_x + column_width - number_width * 2 - 4, text_y)
 		var dps_position := Vector2(
-			column_x + column_width - number_width, text_y)
+			column_x + column_width - number_width * 3 - 6, text_y)
+		var hps_position := Vector2(
+			column_x + column_width - number_width * 2 - 4, text_y)
+		var sps_position := Vector2(
+			column_x + column_width - number_width - 2, text_y)
 
 		var stats: Dictionary = units.get(slot, {})
 		var knocked_out: bool = battle_started and bool(stats.get("dead", false))
 		var damage := float(stats.get("damage", 0.0))
+		var heal := float(stats.get("heal", 0.0))
+		var shield := float(stats.get("shield", 0.0))
 		var is_highest_dps: bool = (
 			battle_started
 			and damage > 0.0
@@ -295,21 +290,6 @@ func _team_table(x: float, y: float, cw: float) -> void:
 		if knocked_out:
 			row_color = knocked_out_color
 
-		var dps_color: Color = row_color
-
-		if battle_finished:
-			# Highlight the whole row after combat, including KO units.
-			if slot == carry_slot:
-				row_color = carry_color
-			elif evaluate_slots.has(slot):
-				row_color = evaluate_color
-			dps_color = row_color
-		else:
-			# Existing live DPS highlighting.
-			if is_highest_dps:
-				dps_color = carry_color
-			elif damage > 0.0 and not knocked_out:
-				dps_color = active_dps_color
 
 		var shiny_suffix := "*" if unit.get("shiny", false) else ""
 		var ko_suffix := "  KO" if knocked_out else ""
@@ -318,34 +298,24 @@ func _team_table(x: float, y: float, cw: float) -> void:
 		]
 		var fitted_name: String = skin.fit(font, unit_name, FS, name_width)
 
-		var damage_text := "-"
 		var dps_text := "-"
+		var hps_text := "-"
+		var sps_text := "-"
 		if battle_started:
-			damage_text = skin.num(damage)
 			dps_text = skin.num(damage / elapsed_time)
+			hps_text = skin.num(heal / elapsed_time)
+			sps_text = skin.num(shield / elapsed_time)
+
+		# Determine DPS color (highlight highest DPS unit)
+		var final_dps_color: Color = skin.GREEN
+		if is_highest_dps:
+			final_dps_color = carry_color
 
 		skin.ink(self, font, name_position, fitted_name, FS, row_color)
-		skin.ink(self, font, damage_position, damage_text,
-			FS, row_color, number_width, HORIZONTAL_ALIGNMENT_RIGHT)
 		skin.ink(self, font, dps_position, dps_text,
-			FS, dps_color, number_width, HORIZONTAL_ALIGNMENT_RIGHT)
+			FS, final_dps_color, number_width, HORIZONTAL_ALIGNMENT_RIGHT)
+		skin.ink(self, font, hps_position, hps_text,
+			FS, skin.YELLOW, number_width, HORIZONTAL_ALIGNMENT_RIGHT)
+		skin.ink(self, font, sps_position, sps_text,
+			FS, skin.BLUE, number_width, HORIZONTAL_ALIGNMENT_RIGHT)
 
-	# Final summary, using one half of the footer for each category.
-	if battle_finished and carry_slot != -1:
-		var footer_y := _base(y + ROW * (TABLE_ROWS + 1))
-		var carry_text := "Carry: %s" % carry_name
-		var evaluate_text := "Evaluate: %s" % ", ".join(evaluate_names)
-		var fitted_carry: String = skin.fit(font, carry_text, FS, column_width)
-		var fitted_evaluate: String = skin.fit(font, evaluate_text, FS, column_width)
-
-		skin.ink(self, font, Vector2(x, footer_y),
-			fitted_carry, FS, carry_color)
-		skin.ink(self, font, Vector2(x + column_width + COL_GAP, footer_y),
-			fitted_evaluate, FS, evaluate_color)
-
-func _icon_count(tex: Texture2D, x: float, y: float, text: String, col: Color) -> float:
-	if tex != null:
-		draw_texture_rect(tex, Rect2(x, y, ICON, ICON), false)
-		x += ICON + 2
-	skin.outlined(self, skin.font_text, Vector2(x, _base(y)), text, FS, col, -1, HORIZONTAL_ALIGNMENT_LEFT, 2)
-	return x + skin.font_text.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, FS).x

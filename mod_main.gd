@@ -130,7 +130,7 @@ func _boot_overlay() -> void:
 		return
 	active = true
 
-	skin = _sub("ui_skin.gd").new()
+	skin = _sub("ui_skin.gd").new(base_dir)
 	if not skin.missing.is_empty():
 		push_warning("BatoEyes: game assets not found, using fallbacks: %s" % ", ".join(skin.missing))
 	layer = CanvasLayer.new()
@@ -364,6 +364,29 @@ static func battle_snapshot(sim) -> Dictionary:
 	if sim == null or sim.data == null:
 		return {}
 	var d = sim.data
+
+	# Temporary diagnostic: log once when a friendly unit is available.
+	if not sim.has_meta("my_stats_fields_logged"):
+		for debug_unit in d.battle_units:
+			if debug_unit == null or debug_unit.team_id != 0:
+				continue
+
+			sim.set_meta("my_stats_fields_logged", true)
+
+			print("MyBattleStats: BATTLE DATA FIELDS")
+			for property in d.get_property_list():
+				print("MyBattleStats data field: ", property["name"])
+
+			print("MyBattleStats: UNIT FIELDS")
+			for property in debug_unit.get_property_list():
+				print("MyBattleStats unit field: ", property["name"])
+
+			var unit_script: Script = debug_unit.get_script()
+			if unit_script != null:
+				print("MyBattleStats unit script: ", unit_script.resource_path)
+
+			break
+
 	# burn / poison damage is pooled per team by the game: each unit gets the share of it that matches
 	# its share of the burn + poison stacks your team applied
 	var units := {}
@@ -372,8 +395,10 @@ static func battle_snapshot(sim) -> Dictionary:
 		if u == null or u.team_id != 0:
 			continue
 		var s: int = u.slot_index
-		var r: Dictionary = units.get(s, {"damage": 0.0, "stacks": 0.0, "dead": true})
+		var r: Dictionary = units.get(s, {"damage": 0.0, "heal": 0.0, "shield": 0.0, "stacks": 0.0, "dead": true})
 		r.damage = float(r.damage) + float(u.damage_dealt)
+		r.heal = float(r.heal) + float(u.healing_done)
+		r.shield = float(r.shield) + float(u.shield_granted)
 		r.stacks = float(r.stacks) + float(u.burn_inflicted + u.poison_inflicted)
 		r.dead = bool(r.dead) and bool(u.is_dead)
 		units[s] = r
@@ -382,9 +407,19 @@ static func battle_snapshot(sim) -> Dictionary:
 	for s in units:
 		if stacks > 0.0:
 			units[s].damage = float(units[s].damage) + status_dmg * float(units[s].stacks) / stacks
+	
+	# Calculate team-wide heal and shield totals by summing per-unit values
+	var total_heal := 0.0
+	var total_shield := 0.0
+	for s in units:
+		total_heal += float(units[s].get("heal", 0.0))
+		total_shield += float(units[s].get("shield", 0.0))
+	
 	return {
 		"time": float(d.time_elapsed),
 		"damage": float(d.team_damage_dealt[0]) + float(d.team_status_damage_dealt[0]),
+		"heal": total_heal,
+		"shield": total_shield,
 		"my_units": units,
 		"over": bool(d.battle_over),
 	}
