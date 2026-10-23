@@ -40,6 +40,8 @@ var _battle_id := 0                  # instance id of the battle state the HUD i
 var _info: Dictionary = {}
 var _battle_result_shown := false    # track if we've shown victory/defeat for this battle
 var _audio_player: AudioStreamPlayer
+var _sudden_death_player: AudioStreamPlayer
+var _defeat_sound_player: AudioStreamPlayer
 var _pikachu_overlay: Control
 
 
@@ -156,13 +158,40 @@ func _boot_overlay() -> void:
 	_audio_player = AudioStreamPlayer.new()
 	_audio_player.name = "VictoryFanfare"
 	var fanfare_path := base_dir.path_join("assets/sounds/fanfareff.ogg")
-	var fanfare_stream = load(fanfare_path)
-	if fanfare_stream is AudioStream:
+	var fanfare_stream = AudioStreamOggVorbis.load_from_file(fanfare_path)
+	if fanfare_stream != null:
 		_audio_player.stream = fanfare_stream
 		_audio_player.volume_db = 0.0
+		print("MyBattleStats: Victory fanfare loaded successfully")
 	else:
-		push_warning("MyBattleStats: Failed to load victory fanfare from: %s" % fanfare_path)
+		push_warning("MyBattleStats: Failed to load fanfare from: %s" % fanfare_path)
 	add_child(_audio_player)
+	
+	# Setup sudden death audio player
+	_sudden_death_player = AudioStreamPlayer.new()
+	_sudden_death_player.name = "SuddenDeathSound"
+	var sd_path := base_dir.path_join("assets/sounds/over9000.ogg")
+	var sd_stream = AudioStreamOggVorbis.load_from_file(sd_path)
+	if sd_stream != null:
+		_sudden_death_player.stream = sd_stream
+		_sudden_death_player.volume_db = 0.0
+		print("MyBattleStats: Sudden death sound loaded successfully")
+	else:
+		push_warning("MyBattleStats: Failed to load sudden death sound from: %s" % sd_path)
+	add_child(_sudden_death_player)
+	
+	# Setup defeat sound player
+	_defeat_sound_player = AudioStreamPlayer.new()
+	_defeat_sound_player.name = "DefeatSound"
+	var defeat_path := base_dir.path_join("assets/sounds/ohbanana.ogg")
+	var defeat_stream = AudioStreamOggVorbis.load_from_file(defeat_path)
+	if defeat_stream != null:
+		_defeat_sound_player.stream = defeat_stream
+		_defeat_sound_player.volume_db = 0.0
+		print("MyBattleStats: Defeat sound loaded successfully")
+	else:
+		push_warning("MyBattleStats: Failed to load defeat sound from: %s" % defeat_path)
+	add_child(_defeat_sound_player)
 	
 	# Setup shocked Pikachu overlay (hidden by default)
 	_pikachu_overlay = Control.new()
@@ -341,30 +370,111 @@ func _tick_battle(st) -> void:
 		_check_battle_result(sim.data)
 
 
+## Animated Pikachu face that spawns randomly and flies off screen while growing
+func show_pikachu(
+		texture: Texture2D,
+		normal_width: float = 180.0,
+		duration: float = 1.8,
+		growth: float = 4.0
+) -> void:
+	if texture == null or texture.get_width() <= 0:
+		return
+
+	var viewport := get_viewport()
+	var screen_size := viewport.get_visible_rect().size
+	if screen_size.x <= 0.0 or screen_size.y <= 0.0:
+		return
+
+	duration = maxf(duration, 0.05)
+	growth = maxf(growth, 1.0)
+
+	var overlay := CanvasLayer.new()
+	overlay.layer = 100
+	overlay.follow_viewport_enabled = false
+	overlay.transform = Transform2D.IDENTITY
+	viewport.add_child(overlay)
+	overlay.process_mode = Node.PROCESS_MODE_ALWAYS
+
+	var face := Sprite2D.new()
+	face.texture = texture
+	face.centered = true
+	overlay.add_child(face)
+
+	# "Normal size" means this displayed width, preserving aspect ratio
+	var start_scale := maxf(normal_width, 1.0) / float(texture.get_width())
+	face.scale = Vector2.ONE * start_scale
+
+	# Random center position; keep the whole starting image visible
+	var half_size := texture.get_size() * start_scale * 0.5
+	var margin := Vector2(
+		minf(half_size.x, screen_size.x * 0.5),
+		minf(half_size.y, screen_size.y * 0.5)
+	)
+	var start := Vector2(
+		randf_range(margin.x, screen_size.x - margin.x),
+		randf_range(margin.y, screen_size.y - margin.y)
+	)
+	face.position = start
+
+	# Uniform random angle, independent of spawn position
+	var angle := randf_range(0.0, TAU)
+	var direction := Vector2(cos(angle), sin(angle))
+
+	# Move far enough that even the enlarged image exits the viewport
+	var final_radius := half_size.length() * growth
+	var distance := screen_size.length() + final_radius + 32.0
+	var finish := start + direction * distance
+
+	var tween := face.create_tween()
+	tween.set_parallel(true)
+	tween.set_trans(Tween.TRANS_LINEAR)
+	tween.tween_property(face, "position", finish, duration)
+	tween.tween_property(
+		face, "scale", Vector2.ONE * start_scale * growth, duration
+	)
+	tween.chain().tween_callback(overlay.queue_free)
+
+
 ## Check battle result and trigger victory fanfare or defeat Pikachu
 func _check_battle_result(battle_data) -> void:
-	# Determine if player won by checking if any enemy units are alive
-	var player_won := true
-	for u in battle_data.battle_units:
-		if u != null and u.team_id == 1:  # team_id 1 is opponent
-			if not u.is_dead:
-				player_won = false
-				break
+	# Use player_health to determine victory/defeat (more reliable than is_dead flag)
+	var player_hp := int(battle_data.player_health[0])  # Team 0 = player
+	var enemy_hp := int(battle_data.player_health[1])   # Team 1 = enemy
+	var is_sudden_death := bool(battle_data.is_sudden_death)
 	
-	if player_won:
+	print("MyBattleStats: Battle ended - Player HP: %d, Enemy HP: %d, Sudden Death: %s" % [player_hp, enemy_hp, is_sudden_death])
+	
+	# Check for sudden death and play special sound
+	if is_sudden_death:
+		print("MyBattleStats: SUDDEN DEATH! Playing over 9000 sound...")
+		if _sudden_death_player != null and _sudden_death_player.stream != null:
+			_sudden_death_player.play()
+	
+	if player_hp > 0 and enemy_hp <= 0:
 		# Victory! Play Final Fantasy fanfare
 		print("MyBattleStats: VICTORY! Playing fanfare...")
 		if _audio_player != null and _audio_player.stream != null:
 			_audio_player.play()
-	else:
-		# Defeat! Show shocked Pikachu
-		print("MyBattleStats: DEFEAT! Showing shocked Pikachu...")
+	elif player_hp <= 0 and enemy_hp > 0:
+		# Defeat! Show shocked Pikachu with animation and sound
+		print("MyBattleStats: DEFEAT! Showing shocked Pikachu with animation...")
+		
+		# Play defeat sound
+		if _defeat_sound_player != null and _defeat_sound_player.stream != null:
+			_defeat_sound_player.play()
+		
+		# Show animated Pikachu flying off screen
 		if _pikachu_overlay != null:
-			_pikachu_overlay.visible = true
-			# Hide Pikachu after 3 seconds
-			await get_tree().create_timer(3.0).timeout
-			if _pikachu_overlay != null:
-				_pikachu_overlay.visible = false
+			var pikachu_img = _pikachu_overlay.get_node("PikachuImage")
+			if pikachu_img != null and pikachu_img.texture != null:
+				show_pikachu(pikachu_img.texture, 180.0, 1.8, 4.0)
+	elif player_hp <= 0 and enemy_hp <= 0:
+		# Draw! Both teams dead - play fanfare
+		print("MyBattleStats: DRAW! Both teams eliminated - Playing fanfare...")
+		if _audio_player != null and _audio_player.stream != null:
+			_audio_player.play()
+	else:
+		print("MyBattleStats: Unknown result - Player HP: %d, Enemy HP: %d" % [player_hp, enemy_hp])
 
 
 ## Static facts about the opponent for the HUD (from the battle's own copy of their run).
